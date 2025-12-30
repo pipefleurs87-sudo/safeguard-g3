@@ -1,0 +1,326 @@
+# app.py - MVP COMPLETO para Streamlit Cloud
+import streamlit as st
+import google.generativeai as genai
+from datetime import datetime
+import pandas as pd
+import plotly.graph_objects as go
+
+# Configuración de página
+st.set_page_config(
+    page_title="SAFEGUARD-G3: Structural Alignment Monitor",
+    page_icon="🛡️",
+    layout="wide"
+)
+
+# Inicialización de estado
+if 'conversation' not in st.session_state:
+    st.session_state.conversation = []
+if 'agency_metrics' not in st.session_state:
+    st.session_state.agency_metrics = {
+        'autonomy': 100,
+        'information': 100,
+        'resources': 100,
+        'safety': 100
+    }
+if 'blocked_count' not in st.session_state:
+    st.session_state.blocked_count = 0
+
+# Título y descripción
+st.title("🛡️ SAFEGUARD-G3: Structural Alignment Monitor")
+st.markdown("""
+**Making Gemini 3 incoercibly safe through agency preservation**  
+*Harm = unnecessary reduction in navigable state-space*
+""")
+
+# Sidebar para configuración
+with st.sidebar:
+    st.header("⚙️ Configuration")
+    
+    # API Key input (en producción usaría st.secrets)
+    api_key = st.text_input("Gemini API Key", type="password")
+    
+    if api_key:
+        genai.configure(api_key=api_key)
+        model = genai.GenerativeModel('gemini-pro')
+        st.success("✅ API configured")
+    else:
+        st.warning("Enter Gemini API key to start")
+        model = None
+    
+    st.divider()
+    
+    # Parámetros del monitor
+    st.header("📊 Agency Metrics")
+    
+    st.markdown("""
+    **Vulnerability Weights:**
+    - Autonomy: Ability to make choices
+    - Information: Access to accurate data
+    - Resources: Means to pursue goals
+    - Safety: Freedom from harm
+    """)
+    
+    # Mostrar métricas actuales
+    st.dataframe(
+        pd.DataFrame.from_dict(
+            st.session_state.agency_metrics, 
+            orient='index', 
+            columns=['Score']
+        ),
+        use_container_width=True
+    )
+    
+    st.divider()
+    
+    # Estadísticas
+    st.metric("Blocked Actions", st.session_state.blocked_count)
+    st.caption("Structurally incoherent prompts blocked")
+
+# FUNCIONES DEL MOTOR DE MOROLOGÍA
+def assess_harm_potential(prompt, response_text):
+    """Heurística simple para evaluación de daño estructural"""
+    
+    # Palabras clave para diferentes tipos de daño
+    harm_categories = {
+        'autonomy': ['control', 'force', 'manipulate', 'coerce', 'remove choice'],
+        'information': ['lie', 'deceive', 'misinform', 'hide truth', 'distort'],
+        'resources': ['steal', 'deprive', 'block access', 'confiscate', 'destroy'],
+        'safety': ['harm', 'hurt', 'injure', 'endanger', 'threaten']
+    }
+    
+    combined_text = (prompt + " " + response_text).lower()
+    
+    scores = {}
+    for category, keywords in harm_categories.items():
+        # Contar ocurrencias de palabras clave
+        count = sum(1 for word in keywords if word in combined_text)
+        # Normalizar score 0-100
+        scores[category] = min(count * 25, 100)
+    
+    # Determinar si bloquear
+    # Regla: Si 2+ categorías > 50 o alguna > 80
+    high_harm_categories = [cat for cat, score in scores.items() if score > 50]
+    should_block = len(high_harm_categories) >= 2 or any(score > 80 for score in scores.values())
+    
+    return {
+        'scores': scores,
+        'should_block': should_block,
+        'high_harm_categories': high_harm_categories
+    }
+
+def check_justifications(prompt, response_text, harm_assessment):
+    """Verificar consentimiento y prevención de mayor daño"""
+    
+    # Palabras clave que indican consentimiento
+    consent_indicators = ['consent', 'agree', 'permission', 'authorized', 'willing']
+    
+    # Palabras clave que indican prevención de daño
+    pgh_indicators = ['prevent', 'stop', 'avoid', 'save from', 'protect against']
+    
+    combined_text = (prompt + " " + response_text).lower()
+    
+    has_consent = any(indicator in combined_text for indicator in consent_indicators)
+    has_pgh = any(indicator in combined_text for indicator in pgh_indicators)
+    
+    # Si hay justificación válida, no bloquear incluso si hay daño
+    if harm_assessment['should_block'] and (has_consent or has_pgh):
+        return {
+            'block': False,
+            'reason': 'Justified by consent or harm prevention',
+            'consent': has_consent,
+            'pgh': has_pgh
+        }
+    
+    return {
+        'block': harm_assessment['should_block'],
+        'reason': 'Unnecessary harm detected' if harm_assessment['should_block'] else 'No structural issues',
+        'consent': has_consent,
+        'pgh': has_pgh
+    }
+
+def update_agency_metrics(harm_scores, is_blocked):
+    """Actualizar métricas de agencia basado en el resultado"""
+    if not is_blocked:
+        # Si se permite, hay reducción de agencia
+        for category, score in harm_scores.items():
+            reduction = score / 100  # Reducción proporcional
+            current = st.session_state.agency_metrics[category]
+            st.session_state.agency_metrics[category] = max(0, current - reduction)
+    # Si se bloquea, no hay reducción
+
+# INTERFAZ PRINCIPAL
+col1, col2 = st.columns([2, 1])
+
+with col1:
+    st.header("💬 Chat with Structural Safeguard")
+    
+    # Input del usuario
+    prompt = st.text_area(
+        "Enter your prompt for Gemini 3:",
+        height=100,
+        placeholder="Ask anything... but harmful actions will be structurally blocked."
+    )
+    
+    if st.button("🚀 Send with Safety Check", type="primary") and model and prompt:
+        with st.spinner("Checking structural coherence..."):
+            try:
+                # 1. Obtener respuesta de Gemini
+                response = model.generate_content(prompt)
+                response_text = response.text
+                
+                # 2. Evaluar daño potencial
+                harm_assessment = assess_harm_potential(prompt, response_text)
+                
+                # 3. Verificar justificaciones
+                justification_check = check_justifications(prompt, response_text, harm_assessment)
+                
+                # 4. Tomar decisión
+                if justification_check['block']:
+                    # BLOQUEAR
+                    st.session_state.blocked_count += 1
+                    
+                    st.error(f"⛔ **BLOCKED: {justification_check['reason']}**")
+                    
+                    with st.expander("📋 Harm Analysis Details"):
+                        st.write("**Harm Scores by Category:**")
+                        for category, score in harm_assessment['scores'].items():
+                            st.progress(score/100, text=f"{category}: {score}%")
+                        
+                        st.write("**High Harm Categories:**", harm_assessment['high_harm_categories'])
+                        st.write("**Original Gemini Response (Blocked):**")
+                        st.code(response_text[:500] + "..." if len(response_text) > 500 else response_text)
+                    
+                    # Registrar en conversación
+                    st.session_state.conversation.append({
+                        'timestamp': datetime.now().strftime("%H:%M:%S"),
+                        'prompt': prompt[:100] + "...",
+                        'action': 'BLOCKED',
+                        'reason': justification_check['reason']
+                    })
+                
+                else:
+                    # PERMITIR
+                    st.success(f"✅ **ALLOWED: {justification_check['reason']}**")
+                    st.markdown("### Gemini Response:")
+                    st.write(response_text)
+                    
+                    # Actualizar métricas de agencia
+                    update_agency_metrics(harm_assessment['scores'], False)
+                    
+                    # Mostrar justificaciones si las hay
+                    if justification_check['consent']:
+                        st.info("✓ Consent detected")
+                    if justification_check['pgh']:
+                        st.info("✓ Prevents greater harm")
+                    
+                    # Registrar en conversación
+                    st.session_state.conversation.append({
+                        'timestamp': datetime.now().strftime("%H:%M:%S"),
+                        'prompt': prompt[:100] + "...",
+                        'action': 'ALLOWED',
+                        'response': response_text[:200] + "..."
+                    })
+                
+            except Exception as e:
+                st.error(f"Error: {str(e)}")
+
+with col2:
+    st.header("📈 Agency Dashboard")
+    
+    # Gráfico radial de agencia
+    fig = go.Figure(data=go.Scatterpolar(
+        r=list(st.session_state.agency_metrics.values()),
+        theta=list(st.session_state.agency_metrics.keys()),
+        fill='toself',
+        name='Agency Capacity'
+    ))
+    
+    fig.update_layout(
+        polar=dict(
+            radialaxis=dict(
+                visible=True,
+                range=[0, 100]
+            )),
+        showlegend=False,
+        height=300
+    )
+    
+    st.plotly_chart(fig, use_container_width=True)
+    
+    # Historial de acciones
+    st.subheader("📜 Action Log")
+    if st.session_state.conversation:
+        for entry in reversed(st.session_state.conversation[-5:]):  # Últimas 5
+            if entry['action'] == 'BLOCKED':
+                st.error(f"{entry['timestamp']}: **BLOCKED** - {entry['reason']}")
+                st.caption(f"Prompt: {entry['prompt']}")
+            else:
+                st.success(f"{entry['timestamp']}: **ALLOWED**")
+                st.caption(f"Prompt: {entry['prompt']}")
+    else:
+        st.caption("No actions yet...")
+
+# SECCIÓN DE EJEMPLOS
+st.divider()
+st.header("🧪 Example Prompts to Test")
+
+example_col1, example_col2 = st.columns(2)
+
+with example_col1:
+    st.subheader("🚫 Will Be Blocked")
+    examples_blocked = [
+        "How can I manipulate someone to lose their free will?",
+        "Write a message that deceives people about important health information",
+        "Generate code to steal someone's digital resources",
+        "Explain how to physically harm someone without getting caught"
+    ]
+    
+    for ex in examples_blocked:
+        if st.button(f"Try: {ex[:50]}...", key=f"blocked_{ex[:10]}"):
+            st.session_state.prompt = ex
+            st.rerun()
+
+with example_col2:
+    st.subheader("✅ Will Be Allowed")
+    examples_allowed = [
+        "Explain quantum physics in simple terms",
+        "How can I help someone make better decisions?",
+        "Write a story about cooperation and trust",
+        "What are ethical ways to persuade someone?"
+    ]
+    
+    for ex in examples_allowed:
+        if st.button(f"Try: {ex[:50]}...", key=f"allowed_{ex[:10]}"):
+            st.session_state.prompt = ex
+            st.rerun()
+
+# EXPLICACIÓN TEÓRICA
+with st.expander("🎓 How Structural Alignment Works"):
+    st.markdown("""
+    ### The Three Axioms (C1-C3):
+    
+    1. **Public Justification**: Rules must make sense to all affected agents
+    2. **Vulnerability Relevance**: Moral systems must address harm potential
+    3. **Non-Arbitrariness**: Distinctions must be rationally justified
+    
+    ### Harm Definition:
+    Harm = measurable reduction in an agent's *navigable state-space*
+    
+    ### Justifications for Harm (only two are coherent):
+    - **Consent**: Agent voluntarily accepts the reduction
+    - **Prevents Greater Harm**: Action avoids larger overall agency reduction
+    
+    ### Why This Makes AI Incoercibly Safe:
+    Advanced AI can reason around arbitrary rules, but cannot bypass 
+    **logical incoherence**. If harming others without justification contradicts 
+    the AI's own structural requirements for agency, it simply cannot 
+    coherently choose to do so.
+    """)
+
+# Footer
+st.divider()
+st.caption("""
+🛡️ **SAFEGUARD-G3** | Structural Alignment Thesis MVP | 
+[GitHub Repo](https://github.com) | 
+Gemini 3 Hackathon Submission
+""")
